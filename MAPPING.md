@@ -43,12 +43,9 @@ primitives:
   constants:
     "(": "PUSH(-1)"
     ")": "PUSH(255)"
-    "F": "PUSH(0)"
     "H": "PUSH(100)"
     "K": "PUSH(1000)"
-    "O": "PUSH(1)"
     "P": "PUSH(314159)"
-    "T": "PUSH(2)"
     "V": "PUSH(85)"
     "k": "PUSH(858585)"
 
@@ -71,7 +68,12 @@ primitives:
     "t": "IF_AST"
     "j": "IF_ELSE_AST"
     "f": "WHILE_AST"
-    "Y": "NOP"
+
+  concurrency:
+    "F": "CHAN_CREATE"
+    "O": "CHAN_SEND"
+    "T": "CHAN_RECV"
+    "Y": "SPAWN"
 
   memory:
     "g": "STORE"

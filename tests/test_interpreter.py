@@ -110,9 +110,6 @@ class TestMoskv85(unittest.TestCase):
         self.vm.execute_block("K") # 1000
         self.assertEqual(self.vm.pop(), 1000)
 
-        self.vm.execute_block("T") # 2
-        self.assertEqual(self.vm.pop(), 2)
-
     def test_flow_control(self):
         # Conditional simple: cond=1, execute block [ 5 ]
         self.vm.execute_block("[5] 1 t")
@@ -148,6 +145,14 @@ class TestMoskv85(unittest.TestCase):
         self.assertEqual(self.vm.pop(), 12)
         # Cleanup
         os.remove(filepath)
+
+    def test_concurrency(self):
+        # Test Channel and Spawn (F, O, T, Y):
+        # 1. Create channel (F) -> returns chan_id 0
+        # 2. Spawn thread (Y) to push 42 (8 5 * 2 +) and send (O) to channel 0
+        # 3. Main thread receives (T) from channel 0
+        self.vm.execute_block("F [8 5 * 2 + 0 O] Y 0 T")
+        self.assertEqual(self.vm.pop(), 42)
 
 if __name__ == "__main__":
     unittest.main()

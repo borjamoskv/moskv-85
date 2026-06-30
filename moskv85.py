@@ -1,11 +1,14 @@
 # MOSKV-85 SYSTEM KERNEL
 # Author: Borja Moskv (borjamoskv)
 # Reality Level: C5-REAL
-# Version: 2.0.0 (Ouroboros AST Compiler)
+# Version: 3.0.0 (Babylon BFT & Concurrency Kernel)
 
 import sys
 import random
 import argparse
+import sqlite3
+import queue
+import threading
 
 ALPHABET = "!\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstu"
 ALPHABET_SET = set(ALPHABET)
@@ -19,10 +22,84 @@ def decode_b85(chars):
     return val
 
 class Moskv85Interpreter:
-    def __init__(self):
+    def __init__(self, db_path="moskv85_consensus.db", shared_state=None):
         self.stack = []
-        self.memory = {}
         self.running = True
+        self.db_path = db_path
+        
+        if shared_state is not None:
+            self.shared_state = shared_state
+            self.memory = shared_state['memory']
+        else:
+            self.shared_state = {
+                'channels': {},
+                'channel_counter': 0,
+                'memory': {}
+            }
+            self.memory = self.shared_state['memory']
+            self._init_db()
+
+    def _init_db(self):
+        # Base 60 WAL Consensus Database Initialization
+        conn = sqlite3.connect(self.db_path, timeout=5.0)
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA busy_timeout=5000;")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS proposals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                filepath TEXT,
+                data TEXT,
+                votes INTEGER DEFAULT 0,
+                committed INTEGER DEFAULT 0
+            );
+        """)
+        conn.commit()
+        conn.close()
+
+    def _run_bft_consensus(self, filepath, data):
+        # Quorum N=3 consensus logic via WAL SQLite ledger
+        conn = sqlite3.connect(self.db_path, timeout=5.0)
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA busy_timeout=5000;")
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO proposals (filepath, data) VALUES (?, ?);", (filepath, data))
+        proposal_id = cursor.lastrowid
+        conn.commit()
+        
+        votes = []
+        lock = threading.Lock()
+        
+        def validator(v_id):
+            try:
+                v_conn = sqlite3.connect(self.db_path, timeout=5.0)
+                v_conn.execute("PRAGMA journal_mode=WAL;")
+                v_conn.execute("PRAGMA busy_timeout=5000;")
+                c = v_conn.cursor()
+                c.execute("SELECT filepath, data FROM proposals WHERE id = ?;", (proposal_id,))
+                row = c.fetchone()
+                if row and row[0] == filepath and row[1] == data:
+                    with lock:
+                        votes.append(v_id)
+                v_conn.close()
+            except Exception:
+                pass
+
+        threads = [threading.Thread(target=validator, args=(i,)) for i in range(3)]
+        for t in threads: t.start()
+        for t in threads: t.join()
+        
+        if len(votes) >= 3:
+            try:
+                with open(filepath, "w", encoding="utf-8") as f:
+                    f.write(data)
+                cursor.execute("UPDATE proposals SET votes = ?, committed = 1 WHERE id = ?;", (len(votes), proposal_id))
+                conn.commit()
+                conn.close()
+                return True
+            except Exception:
+                pass
+        conn.close()
+        return False
 
     def push(self, val):
         self.stack.append(val)
@@ -38,9 +115,6 @@ class Moskv85Interpreter:
         return self.stack[-1]
 
     def compile_aot(self, raw_code):
-        """
-        Transmutes raw MOSKV-85 strings into a dense C5-REAL AST (lists of opcodes, integers, and sub-blocks).
-        """
         ast = []
         i = 0
         n = len(raw_code)
@@ -69,7 +143,7 @@ class Moskv85Interpreter:
                 i += 1
                 continue
                 
-            # Block parsing -> recursive AOT
+            # Block parsing
             if c == "[":
                 depth = 1
                 start_idx = i + 1
@@ -117,7 +191,6 @@ class Moskv85Interpreter:
         return ast
 
     def execute_block(self, source_code):
-        # Legacy entrypoint: compile then execute
         ast = self.compile_aot(source_code)
         self.execute_ast(ast)
 
@@ -126,7 +199,6 @@ class Moskv85Interpreter:
             if not self.running:
                 break
             
-            # Direct Push Dispatch
             if isinstance(node, int):
                 self.push(node)
             elif isinstance(node, list):
@@ -134,7 +206,6 @@ class Moskv85Interpreter:
             elif isinstance(node, str) and len(node) > 1:
                 self.push(node)
             else:
-                # Opcode execution
                 try:
                     self.step(node)
                 except Exception as e:
@@ -246,7 +317,7 @@ class Moskv85Interpreter:
             self.push(a)
         elif inst == "c":
             self.stack.clear()
-        elif inst == "l":
+        elif inst == "l" or inst == "U":
             self.push(len(self.stack))
 
         # Memory Operations
@@ -339,7 +410,7 @@ class Moskv85Interpreter:
             sys.stdout.write("MOSKV-85 Sovereign Virtual Machine\n")
             sys.stdout.write("Creator: Borja Moskv (borjamoskv)\n")
             sys.stdout.write("Reality level: C5-REAL\n")
-            sys.stdout.write("State: Ouroboros AST Execution Matrix\n")
+            sys.stdout.write("State: Babylon BFT Multi-Thread Engine\n")
             sys.stdout.write("========================================\n")
             sys.stdout.flush()
         elif inst == "k":
@@ -360,7 +431,11 @@ class Moskv85Interpreter:
         elif inst == "E":
             self.push(2 ** self.pop())
         elif inst == "F":
-            self.push(0)
+            # Chan Create: -> pushes chan_id
+            chan_id = self.shared_state['channel_counter']
+            self.shared_state['channel_counter'] += 1
+            self.shared_state['channels'][chan_id] = queue.Queue()
+            self.push(chan_id)
         elif inst == "G":
             b = self.pop()
             a = self.pop()
@@ -386,7 +461,12 @@ class Moskv85Interpreter:
             a = self.pop()
             self.push(min(a, b))
         elif inst == "O":
-            self.push(1)
+            # Chan Send: Pop chan_id, Pop val -> sends val
+            chan_id = self.pop()
+            val = self.pop()
+            if chan_id not in self.shared_state['channels']:
+                raise KeyError(f"Channel {chan_id} does not exist")
+            self.shared_state['channels'][chan_id].put(val)
         elif inst == "P":
             self.push(314159)
         elif inst == "Q":
@@ -398,21 +478,24 @@ class Moskv85Interpreter:
             val = self.pop()
             self.push(-1 if val < 0 else (1 if val > 0 else 0))
         elif inst == "T":
-            self.push(2)
-        elif inst == "U":
-            self.push(len(self.stack))
+            # Chan Recv: Pop chan_id -> receives and pushes val
+            chan_id = self.pop()
+            if chan_id not in self.shared_state['channels']:
+                raise KeyError(f"Channel {chan_id} does not exist")
+            val = self.shared_state['channels'][chan_id].get()
+            self.push(val)
         elif inst == "V":
             self.push(85)
+            
+        # File I/O (BFT Protected)
         elif inst == "W":
             data = self.pop()
             filepath = self.pop()
             if not isinstance(filepath, str):
                 raise TypeError("W (Write) requires string filepath")
-            try:
-                with open(filepath, "w", encoding="utf-8") as f:
-                    f.write(str(data))
-            except Exception as e:
-                self.push(0)  # Error signal
+            success = self._run_bft_consensus(filepath, str(data))
+            if not success:
+                self.push(0)
         elif inst == "X":
             filepath = self.pop()
             if not isinstance(filepath, str):
@@ -424,7 +507,18 @@ class Moskv85Interpreter:
             except Exception as e:
                 raise RuntimeError(f"Import failed for '{filepath}': {str(e)}")
         elif inst == "Y":
-            pass # NOP
+            # Spawn: Pop AST block -> execute in background thread
+            block = self.pop()
+            if not isinstance(block, list):
+                raise TypeError("Y (spawn) requires AST block list")
+            def run_vm():
+                sub_interpreter = Moskv85Interpreter(
+                    db_path=self.db_path,
+                    shared_state=self.shared_state
+                )
+                sub_interpreter.execute_ast(block)
+            t = threading.Thread(target=run_vm)
+            t.start()
         elif inst == "Z":
             filepath = self.pop()
             if not isinstance(filepath, str):
@@ -433,7 +527,11 @@ class Moskv85Interpreter:
                 with open(filepath, "r", encoding="utf-8") as f:
                     self.push(f.read())
             except Exception as e:
-                self.push(0)  # Error signal
+                self.push(0)
+
+
+
+        # Legacy symbols
         elif inst == ":":
             if len(self.stack) < 3:
                 raise IndexError("Stack underflow on DUP3")

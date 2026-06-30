@@ -518,6 +518,7 @@ class Moskv85Interpreter:
                 )
                 sub_interpreter.execute_ast(block)
             t = threading.Thread(target=run_vm)
+            t.daemon = True
             t.start()
         elif inst == "Z":
             filepath = self.pop()
@@ -576,3 +577,5 @@ if __name__ == "__main__":
     if args.debug:
         sys.stderr.write(f"\n[FINAL DEBUG] Stack: {interpreter.stack}\n")
         sys.stderr.write(f"[FINAL DEBUG] Memory: {interpreter.memory}\n")
+        
+    sys.exit(0)

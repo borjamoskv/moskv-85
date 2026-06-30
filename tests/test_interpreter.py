@@ -134,5 +134,20 @@ class TestMoskv85(unittest.TestCase):
         self.vm.execute_block("\\Hello\\")
         self.assertEqual(self.vm.pop(), "Hello")
 
+    def test_file_io(self):
+        import os
+        # 1. Write file
+        filepath = "/tmp/moskv85_test.m85"
+        self.vm.execute_block(f"\\{filepath}\\ \\3 4 *\\ W")
+        self.assertTrue(os.path.exists(filepath))
+        # 2. Read file
+        self.vm.execute_block(f"\\{filepath}\\ Z")
+        self.assertEqual(self.vm.pop(), "3 4 *")
+        # 3. Import/Execute file
+        self.vm.execute_block(f"\\{filepath}\\ X")
+        self.assertEqual(self.vm.pop(), 12)
+        # Cleanup
+        os.remove(filepath)
+
 if __name__ == "__main__":
     unittest.main()

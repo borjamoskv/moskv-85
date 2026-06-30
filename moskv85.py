@@ -403,8 +403,37 @@ class Moskv85Interpreter:
             self.push(len(self.stack))
         elif inst == "V":
             self.push(85)
+        elif inst == "W":
+            data = self.pop()
+            filepath = self.pop()
+            if not isinstance(filepath, str):
+                raise TypeError("W (Write) requires string filepath")
+            try:
+                with open(filepath, "w", encoding="utf-8") as f:
+                    f.write(str(data))
+            except Exception as e:
+                self.push(0)  # Error signal
+        elif inst == "X":
+            filepath = self.pop()
+            if not isinstance(filepath, str):
+                raise TypeError("X (Import) requires string filepath")
+            try:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    ext_ast = self.compile_aot(f.read())
+                self.execute_ast(ext_ast)
+            except Exception as e:
+                raise RuntimeError(f"Import failed for '{filepath}': {str(e)}")
         elif inst == "Y":
             pass # NOP
+        elif inst == "Z":
+            filepath = self.pop()
+            if not isinstance(filepath, str):
+                raise TypeError("Z (Read) requires string filepath")
+            try:
+                with open(filepath, "r", encoding="utf-8") as f:
+                    self.push(f.read())
+            except Exception as e:
+                self.push(0)  # Error signal
         elif inst == ":":
             if len(self.stack) < 3:
                 raise IndexError("Stack underflow on DUP3")

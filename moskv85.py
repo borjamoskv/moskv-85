@@ -188,7 +188,65 @@ class Moskv85Interpreter:
             ast.append(c)
             i += 1
             
-        return ast
+        return self.optimize_ast(ast)
+
+    def optimize_ast(self, ast):
+        optimized = []
+        i = 0
+        n = len(ast)
+        
+        BINARY_OPS = {"+", "-", "*", "/", "%", "^", "=", "a", "b", "q", "G", "L", "M", "N"}
+        UNARY_OPS = {"!", "A", "D", "E", "I", "J", "S"}
+
+        while i < n:
+            node = ast[i]
+            if isinstance(node, list):
+                optimized.append(self.optimize_ast(node))
+                i += 1
+                continue
+            
+            # Constant folding for binary operations
+            if (node in BINARY_OPS 
+                    and len(optimized) >= 2 
+                    and isinstance(optimized[-2], int) 
+                    and isinstance(optimized[-1], int)):
+                b = optimized.pop()
+                a = optimized.pop()
+                if node == "+": optimized.append(a + b)
+                elif node == "-": optimized.append(a - b)
+                elif node == "*": optimized.append(a * b)
+                elif node == "/": optimized.append(a // b if b != 0 else 0)
+                elif node == "%": optimized.append(a % b if b != 0 else 0)
+                elif node == "^": optimized.append(a ** b)
+                elif node == "=": optimized.append(1 if a == b else 0)
+                elif node == "a": optimized.append(1 if a < b else 0)
+                elif node == "b": optimized.append(1 if a > b else 0)
+                elif node == "q": optimized.append(1 if a != b else 0)
+                elif node == "G": optimized.append(1 if a >= b else 0)
+                elif node == "L": optimized.append(1 if a <= b else 0)
+                elif node == "M": optimized.append(max(a, b))
+                elif node == "N": optimized.append(min(a, b))
+                i += 1
+                continue
+                
+            # Constant folding for unary operations
+            if (node in UNARY_OPS 
+                    and len(optimized) >= 1 
+                    and isinstance(optimized[-1], int)):
+                val = optimized.pop()
+                if node == "!": optimized.append(~val)
+                elif node == "A": optimized.append(abs(val))
+                elif node == "D": optimized.append(val * 2)
+                elif node == "E": optimized.append(2 ** val)
+                elif node == "I": optimized.append(val + 1)
+                elif node == "J": optimized.append(val - 1)
+                elif node == "S": optimized.append(-1 if val < 0 else (1 if val > 0 else 0))
+                i += 1
+                continue
+                
+            optimized.append(node)
+            i += 1
+        return optimized
 
     def execute_block(self, source_code):
         ast = self.compile_aot(source_code)

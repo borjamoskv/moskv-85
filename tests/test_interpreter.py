@@ -154,5 +154,14 @@ class TestMoskv85(unittest.TestCase):
         self.vm.execute_block("F [8 5 * 2 + 0 O] Y 0 T")
         self.assertEqual(self.vm.pop(), 42)
 
+    def test_ast_optimization(self):
+        # Test constant folding on binary and unary operations
+        ast = self.vm.compile_aot("5 5 + [ 3 4 * 2 A ]")
+        # 5 5 + collapses to 10
+        # 3 4 * collapses to 12
+        # 2 A (absolute of 2) collapses to 2
+        # So the resulting AST should be [10, [12, 2]]
+        self.assertEqual(ast, [10, [12, 2]])
+
 if __name__ == "__main__":
     unittest.main()

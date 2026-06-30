@@ -10,7 +10,7 @@
 
 MOSKV-85 is a stack-based, Turing-complete virtual machine and esoteric programming language designed to operate over the 85 printable ASCII characters from code 33 (character "!") to 117 (character "u"). Any character outside of this alphabet is treated as whitespace or ignored (acting as comments), except when enclosed inside string literal blocks or comments.
 
-**Ouroboros AST Compiler Engine:** To maximize thermodynamic execution efficiency (exergy), MOSKV-85 transpiles all code Ahead-Of-Time (AOT) into a dense Abstract Syntax Tree (AST). This isolates Lexing and Parsing from the Runtime. The `execute_ast` matrix directly pushes nested lists and resolved integers to the stack without any redundant context parsing, resulting in an ultra-fast O(1) execution dispatch for flow-control structures (`f`, `e`, `j`, `t`).
+**Ouroboros AST Compiler & Optimizer:** To maximize thermodynamic execution efficiency (exergy), MOSKV-85 transpiles all code Ahead-Of-Time (AOT) into a dense Abstract Syntax Tree (AST), applying recursive constant folding on binary and unary operations prior to execution. This eliminates runtime computation overhead for static evaluations, resolving expressions like `5 5 +` to `10` directly in the AST, resulting in an ultra-fast O(1) execution dispatch.
 
 ---
 

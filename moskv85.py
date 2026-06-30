@@ -66,29 +66,43 @@ class Moskv85Interpreter:
             idx += 1
         raise SyntaxError("Unbalanced string literal: '\\' has no matching '\\'")
 
-    def execute_block(self, block_code):
+    def lex_purge(self, raw_code):
+        # Anergy Purge Engine (AOT Lexer)
+        purged = []
+        i = 0
+        while i < len(raw_code):
+            c = raw_code[i]
+            if c == "`":
+                while i < len(raw_code) and raw_code[i] != "\n":
+                    i += 1
+                i += 1
+                continue
+            if c == "\\":
+                purged.append(c)
+                i += 1
+                while i < len(raw_code):
+                    purged.append(raw_code[i])
+                    if raw_code[i] == "\\":
+                        i += 1
+                        break
+                    i += 1
+                continue
+            if c in ALPHABET_SET:
+                purged.append(c)
+            i += 1
+        return "".join(purged)
+
+    def execute_block(self, block_code, pre_purged=False):
         # Save current state
         old_code = self.code
         old_pc = self.pc
         
-        self.code = block_code
+        self.code = block_code if pre_purged else self.lex_purge(block_code)
         self.pc = 0
         
         while self.pc < len(self.code) and self.running:
             c = self.code[self.pc]
             
-            # Comments
-            if c == "`":
-                # Skip to end of line
-                while self.pc < len(self.code) and self.code[self.pc] != "\n":
-                    self.pc += 1
-                self.pc += 1
-                continue
-
-            if c not in ALPHABET_SET:
-                self.pc += 1
-                continue
-
             # Core instruction dispatch
             try:
                 self.step(c)
@@ -263,7 +277,7 @@ class Moskv85Interpreter:
         elif inst == "e":
             block = self.pop()
             if isinstance(block, str):
-                self.execute_block(block)
+                self.execute_block(block, pre_purged=True)
             else:
                 # If it is an integer, execute as instruction of that ASCII
                 self.step(chr(block % 256))
@@ -273,7 +287,7 @@ class Moskv85Interpreter:
             block = self.pop()
             if cond != 0:
                 if isinstance(block, str):
-                    self.execute_block(block)
+                    self.execute_block(block, pre_purged=True)
                 else:
                     self.step(chr(block % 256))
         elif inst == "j":
@@ -283,7 +297,7 @@ class Moskv85Interpreter:
             true_block = self.pop()
             chosen_block = true_block if cond != 0 else false_block
             if isinstance(chosen_block, str):
-                self.execute_block(chosen_block)
+                self.execute_block(chosen_block, pre_purged=True)
             else:
                 self.step(chr(chosen_block % 256))
         elif inst == "f":
@@ -294,13 +308,13 @@ class Moskv85Interpreter:
                 raise TypeError("While loop requires execution blocks")
             
             while self.running:
-                self.execute_block(cond_block)
+                self.execute_block(cond_block, pre_purged=True)
                 if not self.running:
                     break
                 cond_val = self.pop()
                 if cond_val == 0:
                     break
-                self.execute_block(body_block)
+                self.execute_block(body_block, pre_purged=True)
 
         # 8. Input/Output
         elif inst == ".":

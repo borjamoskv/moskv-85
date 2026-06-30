@@ -1,7 +1,7 @@
 # MOSKV-85 SYSTEM KERNEL
 # Author: Borja Moskv (borjamoskv)
 # Reality Level: C5-REAL
-# Version: 1.0.0 (Base-85 Spec)
+# Version: 2.0.0 (Ouroboros AST Compiler)
 
 import sys
 import random
@@ -22,8 +22,6 @@ class Moskv85Interpreter:
     def __init__(self):
         self.stack = []
         self.memory = {}
-        self.pc = 0
-        self.code = ""
         self.running = True
 
     def push(self, val):
@@ -39,113 +37,114 @@ class Moskv85Interpreter:
             return 0
         return self.stack[-1]
 
-    def parse_block(self, code_str, start_idx):
-        depth = 1
-        idx = start_idx + 1
-        block_chars = []
-        while idx < len(code_str):
-            c = code_str[idx]
-            if c == "[":
-                depth += 1
-            elif c == "]":
-                depth -= 1
-                if depth == 0:
-                    return "".join(block_chars), idx
-            block_chars.append(c)
-            idx += 1
-        raise SyntaxError("Unbalanced brackets: '[' has no matching ']'")
-
-    def parse_string(self, code_str, start_idx):
-        idx = start_idx + 1
-        str_chars = []
-        while idx < len(code_str):
-            c = code_str[idx]
-            if c == "\\":
-                return "".join(str_chars), idx
-            str_chars.append(c)
-            idx += 1
-        raise SyntaxError("Unbalanced string literal: '\\' has no matching '\\'")
-
-    def lex_purge(self, raw_code):
-        # Anergy Purge Engine (AOT Lexer)
-        purged = []
+    def compile_aot(self, raw_code):
+        """
+        Transmutes raw MOSKV-85 strings into a dense C5-REAL AST (lists of opcodes, integers, and sub-blocks).
+        """
+        ast = []
         i = 0
-        while i < len(raw_code):
+        n = len(raw_code)
+        while i < n:
             c = raw_code[i]
-            if c == "`":
-                while i < len(raw_code) and raw_code[i] != "\n":
-                    i += 1
-                i += 1
-                continue
-            if c == "\\":
-                purged.append(c)
-                i += 1
-                while i < len(raw_code):
-                    purged.append(raw_code[i])
-                    if raw_code[i] == "\\":
-                        i += 1
-                        break
-                    i += 1
-                continue
-            if c in ALPHABET_SET:
-                purged.append(c)
-            i += 1
-        return "".join(purged)
-
-    def execute_block(self, block_code, pre_purged=False):
-        # Save current state
-        old_code = self.code
-        old_pc = self.pc
-        
-        self.code = block_code if pre_purged else self.lex_purge(block_code)
-        self.pc = 0
-        
-        while self.pc < len(self.code) and self.running:
-            c = self.code[self.pc]
             
-            # Core instruction dispatch
-            try:
-                self.step(c)
-            except Exception as e:
-                sys.stderr.write(f"\nExecution error at token '{c}' (pos {self.pc}): {str(e)}\n")
-                self.running = False
+            # Comments
+            if c == "`":
+                while i < n and raw_code[i] != "\n":
+                    i += 1
+                i += 1
+                continue
+                
+            # String literals
+            if c == "\\":
+                i += 1
+                str_chars = []
+                while i < n and raw_code[i] != "\\":
+                    str_chars.append(raw_code[i])
+                    i += 1
+                ast.append("".join(str_chars))
+                i += 1
+                continue
+                
+            if c not in ALPHABET_SET:
+                i += 1
+                continue
+                
+            # Block parsing -> recursive AOT
+            if c == "[":
+                depth = 1
+                start_idx = i + 1
+                idx = start_idx
+                while idx < n:
+                    if raw_code[idx] == "[": depth += 1
+                    elif raw_code[idx] == "]":
+                        depth -= 1
+                        if depth == 0: break
+                    idx += 1
+                if depth != 0: raise SyntaxError("Unbalanced brackets '['")
+                sub_ast = self.compile_aot(raw_code[start_idx:idx])
+                ast.append(sub_ast)
+                i = idx + 1
+                continue
+                
+            # 32-bit literal
+            if c == "#":
+                lit_chars = raw_code[i+1 : i+6]
+                val = decode_b85(lit_chars)
+                if val >= 0x80000000: val -= 0x100000000
+                ast.append(val)
+                i += 6
+                continue
+                
+            # 64-bit literal
+            if c == "$":
+                lit_chars = raw_code[i+1 : i+11]
+                val = decode_b85(lit_chars)
+                if val >= 0x8000000000000000: val -= 0x10000000000000000
+                ast.append(val)
+                i += 11
+                continue
+                
+            # Direct digits 0-9
+            if c in "0123456789":
+                ast.append(int(c))
+                i += 1
+                continue
+                
+            # Normal opcode
+            ast.append(c)
+            i += 1
+            
+        return ast
+
+    def execute_block(self, source_code):
+        # Legacy entrypoint: compile then execute
+        ast = self.compile_aot(source_code)
+        self.execute_ast(ast)
+
+    def execute_ast(self, ast):
+        for node in ast:
+            if not self.running:
                 break
             
-            self.pc += 1
-
-        # Restore state
-        self.code = old_code
-        self.pc = old_pc
+            # Direct Push Dispatch
+            if isinstance(node, int):
+                self.push(node)
+            elif isinstance(node, list):
+                self.push(node)
+            elif isinstance(node, str) and len(node) > 1:
+                self.push(node)
+            else:
+                # Opcode execution
+                try:
+                    self.step(node)
+                except Exception as e:
+                    sys.stderr.write(f"\nExecution error at opcode '{node}': {str(e)}\n")
+                    self.running = False
+                    break
 
     def step(self, inst):
-        # 1. Literals and Constants
-        if inst in "0123456789":
-            self.push(int(inst))
-        elif inst == "#":
-            # 32-bit literal
-            if self.pc + 5 >= len(self.code):
-                raise IndexError("Unexpected End Of File reading 32-bit literal")
-            lit_chars = self.code[self.pc+1 : self.pc+6]
-            val = decode_b85(lit_chars)
-            # Apply signed 32-bit conversion
-            if val >= 0x80000000:
-                val -= 0x100000000
-            self.push(val)
-            self.pc += 5
-        elif inst == "$":
-            # 64-bit literal
-            if self.pc + 10 >= len(self.code):
-                raise IndexError("Unexpected End Of File reading 64-bit literal")
-            lit_chars = self.code[self.pc+1 : self.pc+11]
-            val = decode_b85(lit_chars)
-            # Apply signed 64-bit conversion
-            if val >= 0x8000000000000000:
-                val -= 0x10000000000000000
-            self.push(val)
-            self.pc += 10
-
-        # 2. Arithmetic
-        elif inst == "+":
+        # Arithmetic
+        if inst == "+":
             b = self.pop()
             a = self.pop()
             self.push(a + b)
@@ -170,17 +169,14 @@ class Moskv85Interpreter:
             a = self.pop()
             self.push(a ** b)
 
-        # 3. Bitwise
+        # Bitwise
         elif inst == "!":
             self.push(~self.pop())
         elif inst == "\"":
-            # DUP2
             if len(self.stack) < 2:
                 raise IndexError("Stack underflow on DUP2")
             b = self.stack[-1]
             a = self.stack[-2]
-            self.push(a)
-            self.push(b)
             self.push(a)
             self.push(b)
         elif inst == "&":
@@ -188,7 +184,6 @@ class Moskv85Interpreter:
             a = self.pop()
             self.push(a & b)
         elif inst == "'":
-            # Bitwise XOR
             b = self.pop()
             a = self.pop()
             self.push(a ^ b)
@@ -205,12 +200,11 @@ class Moskv85Interpreter:
             a = self.pop()
             self.push(a >> b)
         elif inst == "_":
-            # Bitwise OR
             b = self.pop()
             a = self.pop()
             self.push(a | b)
 
-        # 4. Comparisons and Logic
+        # Comparisons and Logic
         elif inst == "=":
             b = self.pop()
             a = self.pop()
@@ -228,7 +222,7 @@ class Moskv85Interpreter:
             a = self.pop()
             self.push(1 if a != b else 0)
 
-        # 5. Stack Manipulation
+        # Stack Manipulation
         elif inst == "d":
             self.push(self.peek())
         elif inst == "s":
@@ -242,7 +236,6 @@ class Moskv85Interpreter:
                 raise IndexError("Stack underflow on OVER")
             self.push(self.stack[-2])
         elif inst == "r":
-            # ROT: [a, b, c] -> [b, c, a]
             if len(self.stack) < 3:
                 raise IndexError("Stack underflow on ROT")
             c = self.pop()
@@ -256,67 +249,61 @@ class Moskv85Interpreter:
         elif inst == "l":
             self.push(len(self.stack))
 
-        # 6. Memory Operations
+        # Memory Operations
         elif inst == "g":
-            # Store
             addr = self.pop()
             val = self.pop()
             self.memory[addr] = val
         elif inst == "h":
-            # Load
             addr = self.pop()
             self.push(self.memory.get(addr, 0))
 
-        # 7. Flow Control
-        elif inst == "[":
-            block_code, new_pc = self.parse_block(self.code, self.pc)
-            self.push(block_code)
-            self.pc = new_pc
-        elif inst == "]":
-            raise SyntaxError("Unexpected closing bracket ']'")
+        # Flow Control
         elif inst == "e":
             block = self.pop()
-            if isinstance(block, str):
-                self.execute_block(block, pre_purged=True)
+            if isinstance(block, list):
+                self.execute_ast(block)
+            elif isinstance(block, str):
+                self.execute_ast(self.compile_aot(block))
             else:
-                # If it is an integer, execute as instruction of that ASCII
                 self.step(chr(block % 256))
         elif inst == "t":
-            # Cond
             cond = self.pop()
             block = self.pop()
             if cond != 0:
-                if isinstance(block, str):
-                    self.execute_block(block, pre_purged=True)
+                if isinstance(block, list):
+                    self.execute_ast(block)
+                elif isinstance(block, str):
+                    self.execute_ast(self.compile_aot(block))
                 else:
                     self.step(chr(block % 256))
         elif inst == "j":
-            # If-Else
             cond = self.pop()
             false_block = self.pop()
             true_block = self.pop()
             chosen_block = true_block if cond != 0 else false_block
-            if isinstance(chosen_block, str):
-                self.execute_block(chosen_block, pre_purged=True)
+            if isinstance(chosen_block, list):
+                self.execute_ast(chosen_block)
+            elif isinstance(chosen_block, str):
+                self.execute_ast(self.compile_aot(chosen_block))
             else:
                 self.step(chr(chosen_block % 256))
         elif inst == "f":
-            # While loop: cond_block, body_block
             body_block = self.pop()
             cond_block = self.pop()
-            if not isinstance(cond_block, str) or not isinstance(body_block, str):
-                raise TypeError("While loop requires execution blocks")
+            if not isinstance(cond_block, list) or not isinstance(body_block, list):
+                raise TypeError("While loop requires AST execution blocks")
             
             while self.running:
-                self.execute_block(cond_block, pre_purged=True)
+                self.execute_ast(cond_block)
                 if not self.running:
                     break
                 cond_val = self.pop()
                 if cond_val == 0:
                     break
-                self.execute_block(body_block, pre_purged=True)
+                self.execute_ast(body_block)
 
-        # 8. Input/Output
+        # Input/Output
         elif inst == ".":
             sys.stdout.write(str(self.pop()))
             sys.stdout.flush()
@@ -346,37 +333,27 @@ class Moskv85Interpreter:
             except ValueError:
                 self.push(0)
 
-        # 9. Meta & Diagnostic
+        # Meta & Diagnostic
         elif inst == "m":
-            # Metadata / Version / Creator
             sys.stdout.write("\n========================================\n")
             sys.stdout.write("MOSKV-85 Sovereign Virtual Machine\n")
             sys.stdout.write("Creator: Borja Moskv (borjamoskv)\n")
             sys.stdout.write("Reality level: C5-REAL\n")
-            sys.stdout.write("State: Stable Termodinamic Equilibrium\n")
+            sys.stdout.write("State: Ouroboros AST Execution Matrix\n")
             sys.stdout.write("========================================\n")
             sys.stdout.flush()
         elif inst == "k":
-            # Creator magic constant
             self.push(858585)
         elif inst == "u":
-            # Halt
             self.running = False
 
-        # 10. String literal parser
-        elif inst == "\\":
-            str_val, new_pc = self.parse_string(self.code, self.pc)
-            self.push(str_val)
-            self.pc = new_pc
-
-        # 11. Custom math / system helpers (A-Z)
+        # Custom math / system helpers (A-Z)
         elif inst == "A":
             self.push(abs(self.pop()))
         elif inst == "B":
             val = self.pop()
             self.push(val.bit_length() if hasattr(val, "bit_length") else 0)
         elif inst == "C":
-            # Convert to string representation
             self.push(str(self.pop()))
         elif inst == "D":
             self.push(self.pop() * 2)
@@ -429,7 +406,6 @@ class Moskv85Interpreter:
         elif inst == "Y":
             pass # NOP
         elif inst == ":":
-            # DUP3
             if len(self.stack) < 3:
                 raise IndexError("Stack underflow on DUP3")
             c = self.stack[-1]
@@ -439,11 +415,9 @@ class Moskv85Interpreter:
             self.push(b)
             self.push(c)
         elif inst == ";":
-            # POP2
             self.pop()
             self.pop()
         elif inst == "@":
-            # ROT_LEFT: [a, b, c] -> [b, c, a]
             if len(self.stack) < 3:
                 raise IndexError("Stack underflow on ROT_LEFT")
             c = self.pop()
@@ -453,7 +427,6 @@ class Moskv85Interpreter:
             self.push(c)
             self.push(a)
         elif inst == "?":
-            # System state dump
             sys.stderr.write(f"\n[DEBUG] Stack: {self.stack} | Memory: {self.memory}\n")
             sys.stderr.flush()
 
